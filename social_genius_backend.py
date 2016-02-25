@@ -49,8 +49,6 @@ class Meetup(Resource):
             num = len(results['results'])
             users += results['results']
 
-            # print(num)
-
             try:
                 if len(results['meta']['next']) <= 0:
                     break
