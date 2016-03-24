@@ -5,5 +5,5 @@ RUN apk add --update \
     python3 \
 && rm -rf /var/cache/apk/*
 
-COPY src /opt/
+COPY src /opt/src
 RUN pip install -r /opt/src/requirements.txt
