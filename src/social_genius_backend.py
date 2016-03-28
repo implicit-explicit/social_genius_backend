@@ -1,76 +1,95 @@
 from flask import Flask, request
-from flask_restful import Resource, Api
-
-import config
-
-import json
 import requests
+import json
+from collections import defaultdict
+from neo4jrestclient.client import GraphDatabase
+import configparser
 
-app = Flask(__name__, static_folder=config.STATIC_FILES)
-api = Api(app)
-logger = app.logger
+app = Flask(__name__)
+meetup_key = None
 
+@app.route("/city")
+def city():
+    print("Getting city from meetup group")
+    meetup_group = request.args['meetup_group']
 
-class StaticAssets(Resource):
-    @classmethod
-    def get(self, path):
-        return app.send_static_file(path)
+    request_string = 'https://api.meetup.com/2/groups?&key={}&group_urlname={}&page=20'.format(
+        meetup_key, meetup_group)
 
+    results = None
+    response = {}
 
-class Index(Resource):
-    @classmethod
-    def get(self):
-        return app.send_static_file('index.html')
+    r = requests.get(request_string)
+    try:
+        results = json.loads(r.content.decode('utf-8'))
+    except Exception as e:
+        print(e)
 
+    response['city'] = results['results'][0]['city']
+    response['country'] = results['results'][0]['country']
 
-class Meetup(Resource):
+    if response['country'] == 'US':
+        response['state'] = results['results'][0]['state']
+    else:
+        response['state'] = None
 
-    def get_members(self, api_key, group_urlname, page_size=200):
+    print('Found. City: {} State: {} Country: {}'.format(response['city'], response['state'], response['country']))
 
-        logger.info('Retrieving users for {}'.format(group_urlname))
+    print('Finding tech meetup groups in {}...'.format(response['city']))
+    request_string = 'https://api.meetup.com/2/groups?&key={}&category_id=34&country={}&city={}&state={}&page=200'.format(meetup_key, response['country'], response['city'], response['state'])
 
-        results = None
-        users = []
+    results = None
+    meetup_groups = []
 
-        request_string = '{}{}?key={}&group_urlname={}&page={}'.format(config.API_URL, config.QUERY, api_key,
-                                                                       group_urlname, page_size)
+    while True:
+        r = requests.get(request_string)
 
-        while True:
+        try:
+            results = json.loads(r.content.decode('utf-8'))
+        except Exception as e:
+            print(e)
 
-            # print(request_string)
+        for key in results['results']:
+            meetup_groups.append(key['urlname'])
 
-            r = requests.get(request_string)
-            try:
-                results = json.loads(r.content.decode('utf-8'))
-            except Exception as e:
-                print(e)
-
-
-            num = len(results['results'])
-            users += results['results']
-
-            try:
-                if len(results['meta']['next']) <= 0:
-                    break
-            except e:
-                print(e)
+        try:
+            if len(results['meta']['next']) <= 0:
                 break
+        except Exception as e:
+            print(e)
+            break
 
-            request_string = results['meta']['next']
+        request_string = results['meta']['next']
 
-        logger.info('Retrieved {} users'.format(len(users)))
+    print('Found {} tech meetup groups near {}'.format(len(meetup_groups), response['city']))
 
-        return users
+    print('Finding upcoming meetup events at {} meetup groups'.format(len(meetup_groups)))
 
-    def get(self, group_name):
-        return self.get_members(config.API_KEY, group_name)
+    meetup_events = defaultdict(list)
 
-# Meetup
-api.add_resource(Meetup, '/meetup/<string:group_name>')
+    for meetup_group in meetup_groups:
+        request_string = 'https://api.meetup.com/{}/events?&key={}&page=200'.format(
+            meetup_group, meetup_key)
+        r = requests.get(request_string)
+        try:
+            results = json.loads(r.content.decode('utf-8'))
+        except Exception as e:
+            print(e)
 
-# Static assets
-api.add_resource(StaticAssets, '/<path:path>')
-api.add_resource(Index, '/')
+        if len(results) > 0:
+            for key in results:
+                try:
+                    meetup_events[meetup_group].append(key['time'])
+                except KeyError as e:
+                    print("Time error for group {}".format(meetup_group))
 
-if __name__ == '__main__':
-    app.run(host="0.0.0.0", debug=True)
+    print('Found {} upcoming meetup events in {}'.format(len(meetup_events), response['city']))
+
+    return json.dumps(meetup_events)
+
+if __name__ == "__main__":
+    config = configparser.ConfigParser()
+    config.read('keys')
+    meetup_key = config['MEETUP KEY']['meetup_key']
+    print(meetup_key)
+    app.run(host='0.0.0.0', debug=True)

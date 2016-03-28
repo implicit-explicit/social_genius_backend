@@ -1,9 +1,6 @@
-FROM alpine:3.3
-
-RUN apk add --update \
-    py-pip \
-    python3 \
-&& rm -rf /var/cache/apk/*
+FROM python:3-onbuild
 
 COPY src /opt/src
 RUN pip install -r /opt/src/requirements.txt
+
+ENTRYPOINT ["python","/opt/src/social_genius_backend.py"]
