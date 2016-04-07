@@ -1,10 +1,11 @@
 version: '2'
 services:
-    worker:
+    main:
         image: social_genius_backend
         restart: always
         ports:
             - "5000:5000"
-        #volumes:
-        #    - ./src:/opt/src
-        entrypoint: python /opt/src/social_genius_backend.py
+        volumes:
+            - ./src:/opt/src
+            - ../social_genius_frontend/resources/public/:/opt/src/static
+        entrypoint: python /opt/src/social_genius_backend.py -c /opt/src/config
