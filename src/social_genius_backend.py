@@ -1,20 +1,52 @@
-from flask import Flask, request, send_from_directory
+import eventlet
+eventlet.monkey_patch()
+
+from flask import Flask, request
 import requests
 import json
 import logging
-import sys
 from collections import defaultdict
 import configparser
 import click
+from urllib.request import urlopen
 
 app = Flask(__name__, static_folder='static')
-app.logger.setLevel(logging.DEBUG)
 config = None
+
+
+@app.before_first_request
+def setup_logging():
+    if not app.debug:
+        app.logger.addHandler(logging.StreamHandler())
+        app.logger.setLevel(logging.DEBUG)
+
+
+def fetch_api_endpoint(meetup_group):
+    meetup_key = config['meetup']['api_key']
+    request_string = 'https://api.meetup.com/{}/events?&key={}&page=200'.format(meetup_group, meetup_key)
+    app.logger.info('Fetching events for {}'.format(meetup_group))
+    #r = requests.get(request_string)
+    body = urlopen(request_string).read()
+    try:
+        # results = json.loads(r.content.decode('utf-8'))
+        results = json.loads(body.decode('utf-8'))
+    except Exception as e:
+        app.logger.info(e)
+        return
+    meetup_events = []
+    app.logger.info('Found {} results for {}'.format(len(results), meetup_group))
+    if len(results) > 0:
+        for key in results:
+            try:
+                meetup_events.append(key['time'])
+            except KeyError as e:
+                app.logger.info("Time error for group {}".format(meetup_group))
+    return meetup_group, meetup_events
 
 
 @app.route("/city")
 def city():
-    app.logger.info("Getting city from meetup group")
+
     meetup_group = request.args['meetup_group']
     meetup_key = config['meetup']['api_key']
 
@@ -24,13 +56,12 @@ def city():
     results = None
     response = {}
 
+    app.logger.info("Getting city for meetup group {}".format(meetup_group))
     r = requests.get(request_string)
     try:
         results = json.loads(r.content.decode('utf-8'))
     except Exception as e:
         app.logger.info(e)
-
-    app.logger.info(results)
 
     response['city'] = results['results'][0]['city']
     response['country'] = results['results'][0]['country']
@@ -74,22 +105,10 @@ def city():
 
     meetup_events = defaultdict(list)
 
-    for meetup_group in meetup_groups:
-        request_string = 'https://api.meetup.com/{}/events?&key={}&page=200'.format(
-            meetup_group, meetup_key)
-        r = requests.get(request_string)
-        try:
-            results = json.loads(r.content.decode('utf-8'))
-        except Exception as e:
-            app.logger.info(e)
+    pool = eventlet.GreenPool(1)
 
-        if len(results) > 0:
-            for key in results:
-                try:
-                    meetup_events[meetup_group].append(key['time'])
-                except KeyError as e:
-                    app.logger.info("Time error for group {}".format(meetup_group))
-        break
+    for group, events in pool.imap(fetch_api_endpoint, meetup_groups):
+        meetup_events[group] = events
 
     app.logger.info('Found {} upcoming meetup events in {}'.format(len(meetup_events), response['city']))
 
