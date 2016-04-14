@@ -2,6 +2,10 @@ version: '2'
 services:
     main:
         image: social_genius_backend
+        depends_on:
+            - neo4j
+        links:
+            - neo4j
         restart: always
         ports:
             - "5000:5000"
@@ -9,3 +13,10 @@ services:
             - ./src:/opt/src
             - ../social_genius_frontend/resources/public/:/opt/src/static
         entrypoint: python /opt/src/social_genius_backend.py -c /opt/src/config
+    neo4j:
+        image: neo4j
+        restart: always
+        ports:
+            - "7474:7474"
+        volumes:
+            - ./dbdata:/data

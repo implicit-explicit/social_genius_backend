@@ -1,6 +1,12 @@
 [DEFAULT]
 static_files = static
 
+[neo4j]
+host = neo4j
+database = socialgenius
+user = neo4j
+password = temp1234
+
 [meetup]
 api_key = your api key
 api_url = https://api.meetup.com/2/
