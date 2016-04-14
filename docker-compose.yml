@@ -12,7 +12,7 @@ services:
         volumes:
             - ./src:/opt/src
             - ../social_genius_frontend/resources/public/:/opt/src/static
-        entrypoint: python /opt/src/social_genius_backend.py -c /opt/src/config
+        entrypoint: python /opt/src/social_genius_backend.py -c /opt/src/config webserver
     neo4j:
         image: neo4j
         restart: always
