@@ -1,6 +1,6 @@
-import eventlet
-eventlet.monkey_patch()
-
+#import eventlet
+#eventlet.monkey_patch()
+import time
 from flask import Flask, request
 import requests
 import json
@@ -9,37 +9,40 @@ from collections import defaultdict
 import configparser
 import click
 from urllib.request import urlopen
-from py2neo import Graph
+from py2neo import Graph, Node, Relationship
 
 app = Flask(__name__, static_folder='static')
 config = None
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @app.before_first_request
 def setup_logging():
     if not app.debug:
-        app.logger.addHandler(logging.StreamHandler())
-        app.logger.setLevel(logging.DEBUG)
+        global logger
+        logger = app.logger
+        logger.addHandler(logging.StreamHandler())
+        logger.setLevel(logging.DEBUG)
 
 
 def get_group_events(meetup_group):
     meetup_key = config['meetup']['api_key']
     request_string = 'https://api.meetup.com/{}/events?&key={}&page=200'.format(meetup_group, meetup_key)
-    app.logger.info('Fetching events for {}'.format(meetup_group))
-    #r = requests.get(request_string)
-    body = urlopen(request_string).read()
+    logger.info('Fetching events for {}'.format(meetup_group))
+    r = requests.get(request_string)
     try:
-        # results = json.loads(r.content.decode('utf-8'))
-        results = json.loads(body.decode('utf-8'))
+        results = json.loads(r.content.decode('utf-8'))
     except Exception as e:
         app.logger.info(e)
         return
     meetup_events = []
-    app.logger.info('Found {} results for {}'.format(len(results), meetup_group))
+    logger.info('Found {} results for {}'.format(len(results), meetup_group))
     if len(results) > 0:
         for key in results:
             try:
-                meetup_events.append(key['time'])
+                meetup_events.append(key)
             except KeyError as e:
                 app.logger.info("Time error for group {}".format(meetup_group))
     return meetup_group, meetup_events
@@ -55,7 +58,7 @@ def get_group_location(meetup_group):
     results = None
     location = {}
 
-    app.logger.info("Getting city for meetup group {}".format(meetup_group))
+    logger.info("Getting city for meetup group {}".format(meetup_group))
     r = requests.get(request_string)
     try:
         results = json.loads(r.content.decode('utf-8'))
@@ -70,7 +73,7 @@ def get_group_location(meetup_group):
     else:
         location['state'] = None
 
-    app.logger.info(
+    logger.info(
         'Found. City: {} State: {} Country: {}'.format(location['city'], location['state'], location['country']))
 
     return location
@@ -78,7 +81,7 @@ def get_group_location(meetup_group):
 
 def get_groups_in_location(location, category=34):
     meetup_key = config['meetup']['api_key']
-    app.logger.info('Finding tech meetup groups in {}...'.format(location['city']))
+    logger.info('Finding tech meetup groups in {}...'.format(location['city']))
     request_string = 'https://api.meetup.com/2/groups?&key={}&category_id={}&country={}&city={}&state={}&page=200'.format(
         meetup_key, category,location['country'], location['city'], location['state'])
 
@@ -105,7 +108,7 @@ def get_groups_in_location(location, category=34):
 
         request_string = results['meta']['next']
 
-    app.logger.info('Found {} tech meetup groups near {}'.format(len(meetup_groups), location['city']))
+    logger.info('Found {} tech meetup groups near {}'.format(len(meetup_groups), location['city']))
     return meetup_groups
 
 
@@ -114,14 +117,11 @@ def city():
     location = get_group_location(request.args['meetup_group'])
     meetup_groups = get_groups_in_location(location, category=34)
 
-    app.logger.info('Finding upcoming meetup events at {} meetup groups'.format(len(meetup_groups)))
+    logger.info('Finding upcoming meetup events at {} meetup groups'.format(len(meetup_groups)))
 
     meetup_events = defaultdict(list)
-    pool = eventlet.GreenPool(1)
-    for group, events in pool.imap(get_group_events, meetup_groups):
-        meetup_events[group] = events
 
-    app.logger.info('Found {} upcoming meetup events in {}'.format(len(meetup_events), location['city']))
+    logger.info('Found {} upcoming meetup events in {}'.format(len(meetup_events), location['city']))
 
     return json.dumps(meetup_events)
 
@@ -136,17 +136,47 @@ def root():
     return app.send_static_file('index.html')
 
 
-def sync_data():
-    graph = Graph(host=config['neo4j']['host'], database=config['neo4j']['database'])
-
-@click.command()
+@click.group()
 @click.option('-c', default='config', help='Config file. Defaults to "config"')
-def main(c):
+def cli(c):
     global config
     config = configparser.ConfigParser()
-    app.logger.warning('Reading configuration file {}'.format(c))
+    logger.info('Reading configuration file {}'.format(c))
     config.read(c)
+
+
+@click.command()
+def webserver():
     app.run(host='0.0.0.0', debug=False)
 
+
+@click.command(name='sync', help='Saves data from the Meetup API to the local database')
+@click.argument('group')
+def sync_meetup_data(group):
+    graph = Graph(host=config['neo4j']['host'], user=config['neo4j']['user'],
+                  password=config['neo4j']['password'])
+
+    location = get_group_location(group)
+    meetup_groups = get_groups_in_location(location, category=34)
+
+    logger.info('Finding upcoming meetup events at {} meetup groups'.format(len(meetup_groups)))
+
+    for group in meetup_groups:
+        time.sleep(2)
+        group, events = get_group_events(group)
+        tx = graph.begin()
+        node_group = Node("Group", name=group)
+        tx.create(node_group)
+        for event in events:
+            node_event = Node('Event', name=event['name'], time=event['time'])
+            tx.create(node_event)
+            rel = Relationship(node_group, "HAS EVENT", node_event)
+            tx.create(rel)
+        tx.commit()
+        logger.info('Transaction ({}) status: {}'.format(group, str(tx.finished())))
+
+
 if __name__ == "__main__":
-    main()
+    cli.add_command(webserver)
+    cli.add_command(sync_meetup_data)
+    cli()
