@@ -1,5 +1,3 @@
-#import eventlet
-#eventlet.monkey_patch()
 import time
 from flask import Flask, request
 import requests
@@ -8,7 +6,6 @@ import logging
 from collections import defaultdict
 import configparser
 import click
-from urllib.request import urlopen
 from py2neo import Graph, Node, Relationship
 
 app = Flask(__name__, static_folder='static')
@@ -157,6 +154,12 @@ def sync_meetup_data(group):
                   password=config['neo4j']['password'])
 
     location = get_group_location(group)
+
+    tx = graph.begin()
+    location_node = Node('Location', city=location['city'], state=location['state'], country=location['country'])
+    tx.create(location_node)
+    tx.commit()
+
     meetup_groups = get_groups_in_location(location, category=34)
 
     logger.info('Finding upcoming meetup events at {} meetup groups'.format(len(meetup_groups)))
@@ -165,12 +168,14 @@ def sync_meetup_data(group):
         time.sleep(2)
         group, events = get_group_events(group)
         tx = graph.begin()
-        node_group = Node("Group", name=group)
-        tx.create(node_group)
+        group_node = Node("Group", name=group)
+        tx.create(group_node)
+        location_relation = Relationship(location_node, 'HAS MEETUP', group_node)
+        tx.create(location_relation)
         for event in events:
-            node_event = Node('Event', name=event['name'], time=event['time'])
-            tx.create(node_event)
-            rel = Relationship(node_group, "HAS EVENT", node_event)
+            event_node = Node('Event', name=event['name'], time=event['time'])
+            tx.create(event_node)
+            rel = Relationship(group_node, "HAS EVENT", event_node)
             tx.create(rel)
         tx.commit()
         logger.info('Transaction ({}) status: {}'.format(group, str(tx.finished())))
