@@ -9,6 +9,7 @@ from collections import defaultdict
 import configparser
 import click
 from urllib.request import urlopen
+from py2neo import Graph
 
 app = Flask(__name__, static_folder='static')
 config = None
@@ -21,7 +22,7 @@ def setup_logging():
         app.logger.setLevel(logging.DEBUG)
 
 
-def fetch_api_endpoint(meetup_group):
+def get_group_events(meetup_group):
     meetup_key = config['meetup']['api_key']
     request_string = 'https://api.meetup.com/{}/events?&key={}&page=200'.format(meetup_group, meetup_key)
     app.logger.info('Fetching events for {}'.format(meetup_group))
@@ -44,17 +45,15 @@ def fetch_api_endpoint(meetup_group):
     return meetup_group, meetup_events
 
 
-@app.route("/city")
-def city():
+def get_group_location(meetup_group):
 
-    meetup_group = request.args['meetup_group']
     meetup_key = config['meetup']['api_key']
 
     request_string = 'https://api.meetup.com/2/groups?&key={}&group_urlname={}&page=20'.format(
         meetup_key, meetup_group)
 
     results = None
-    response = {}
+    location = {}
 
     app.logger.info("Getting city for meetup group {}".format(meetup_group))
     r = requests.get(request_string)
@@ -63,18 +62,25 @@ def city():
     except Exception as e:
         app.logger.info(e)
 
-    response['city'] = results['results'][0]['city']
-    response['country'] = results['results'][0]['country']
+    location['city'] = results['results'][0]['city']
+    location['country'] = results['results'][0]['country']
 
-    if response['country'] == 'US':
-        response['state'] = results['results'][0]['state']
+    if location['country'] == 'US':
+        location['state'] = results['results'][0]['state']
     else:
-        response['state'] = None
+        location['state'] = None
 
-    app.logger.info('Found. City: {} State: {} Country: {}'.format(response['city'], response['state'], response['country']))
+    app.logger.info(
+        'Found. City: {} State: {} Country: {}'.format(location['city'], location['state'], location['country']))
 
-    app.logger.info('Finding tech meetup groups in {}...'.format(response['city']))
-    request_string = 'https://api.meetup.com/2/groups?&key={}&category_id=34&country={}&city={}&state={}&page=200'.format(meetup_key, response['country'], response['city'], response['state'])
+    return location
+
+
+def get_groups_in_location(location, category=34):
+    meetup_key = config['meetup']['api_key']
+    app.logger.info('Finding tech meetup groups in {}...'.format(location['city']))
+    request_string = 'https://api.meetup.com/2/groups?&key={}&category_id={}&country={}&city={}&state={}&page=200'.format(
+        meetup_key, category,location['country'], location['city'], location['state'])
 
     results = None
     meetup_groups = []
@@ -99,18 +105,23 @@ def city():
 
         request_string = results['meta']['next']
 
-    app.logger.info('Found {} tech meetup groups near {}'.format(len(meetup_groups), response['city']))
+    app.logger.info('Found {} tech meetup groups near {}'.format(len(meetup_groups), location['city']))
+    return meetup_groups
+
+
+@app.route("/city")
+def city():
+    location = get_group_location(request.args['meetup_group'])
+    meetup_groups = get_groups_in_location(location, category=34)
 
     app.logger.info('Finding upcoming meetup events at {} meetup groups'.format(len(meetup_groups)))
 
     meetup_events = defaultdict(list)
-
     pool = eventlet.GreenPool(1)
-
-    for group, events in pool.imap(fetch_api_endpoint, meetup_groups):
+    for group, events in pool.imap(get_group_events, meetup_groups):
         meetup_events[group] = events
 
-    app.logger.info('Found {} upcoming meetup events in {}'.format(len(meetup_events), response['city']))
+    app.logger.info('Found {} upcoming meetup events in {}'.format(len(meetup_events), location['city']))
 
     return json.dumps(meetup_events)
 
@@ -124,6 +135,9 @@ def send_static(path):
 def root():
     return app.send_static_file('index.html')
 
+
+def sync_data():
+    graph = Graph(host=config['neo4j']['host'], database=config['neo4j']['database'])
 
 @click.command()
 @click.option('-c', default='config', help='Config file. Defaults to "config"')
