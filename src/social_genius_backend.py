@@ -111,16 +111,22 @@ def get_groups_in_location(location, category=34):
 
 @app.route("/city")
 def city():
-    location = get_group_location(request.args['meetup_group'])
-    meetup_groups = get_groups_in_location(location, category=34)
+    location = request.args['meetup_group']
 
-    logger.info('Finding upcoming meetup events at {} meetup groups'.format(len(meetup_groups)))
+    graph = Graph(host=config['neo4j']['host'], user=config['neo4j']['user'],
+                  password=config['neo4j']['password'])
 
-    meetup_events = defaultdict(list)
+    logger.info('Finding upcoming meetup events in {}'.format(location))
 
-    logger.info('Found {} upcoming meetup events in {}'.format(len(meetup_events), location['city']))
+    groups_data = defaultdict()
 
-    return json.dumps(meetup_events)
+    groups = graph.find('Group')
+    for group in groups:
+        groups_data[group.properties['name']] = []
+        for rel in graph.match(start_node=group, rel_type="HAS EVENT"):
+            groups_data[group.properties['name']].append(rel.end_node().properties['time'])
+
+    return json.dumps(groups_data)
 
 
 @app.route('/<path:path>')
